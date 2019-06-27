@@ -12,6 +12,8 @@ repositories {
 }
 
 dependencies {
+    implementation(project(":exchange"))
+    implementation("org.springframework:spring-websocket:5.1.8.RELEASE")
     implementation(kotlin("stdlib-jdk8"))
 }
 
