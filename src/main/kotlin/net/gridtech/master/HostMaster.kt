@@ -6,6 +6,7 @@ import net.gridtech.core.exchange.DataShell
 import net.gridtech.core.exchange.ExchangeParcel
 import net.gridtech.core.exchange.IMaster
 import net.gridtech.core.exchange.ISlave
+import net.gridtech.core.util.compose
 import net.gridtech.core.util.parse
 import net.gridtech.core.util.stringfy
 import org.springframework.web.socket.CloseStatus
@@ -34,6 +35,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
     }
 
     override fun afterConnectionEstablished(session: WebSocketSession) {
+        println("child node ${childNodeId(session)} peer ${childPeer(session)} connected")
         childrenSet.add(session)
         createChildNodeScope(session)
         send(session, ISlave::beginToSync, "")
@@ -50,25 +52,41 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
     }
 
     override fun afterConnectionClosed(session: WebSocketSession, status: CloseStatus) {
+        System.err.println("child node ${childNodeId(session)} peer ${childPeer(session)} disconnected ${status.code}")
         childrenSet.remove(session)
     }
 
-    fun createChildNodeScope(session: WebSocketSession) {
-        val nodeScope = bootstrap.nodeService.getNodeScope(childNodeId(session))
-        val nodeIdScope = nodeScope.map { it.id }
+    override fun handleTransportError(session: WebSocketSession, exception: Throwable) {
+        System.err.println("child node ${childNodeId(session)} peer ${childPeer(session)} error ${exception.message}")
+        childrenSet.remove(session)
+    }
+
+    private fun createChildNodeScope(session: WebSocketSession) {
+        val childNodeId = childNodeId(session)
+        val nodeScope = bootstrap.nodeService.getNodeScope(childNodeId)
         val nodeClassIdScope = nodeScope.map { it.nodeClassId }.toSet()
-        val fieldIdScope = nodeClassIdScope.flatMap { nodeClassId ->
+        val fieldScope = nodeClassIdScope.flatMap { nodeClassId ->
             bootstrap.nodeClassService.getById(nodeClassId)?.let { nodeClass ->
                 bootstrap.fieldService.getByNodeClass(nodeClass)
             } ?: emptyList()
-        }.map { it.id }
+        }
+        val fieldValueIdScope = nodeScope.flatMap { node ->
+            fieldScope
+                    .filter { it.nodeClassId == node.nodeClassId }
+                    .filter { bootstrap.fieldValueService.valueSyncToChild(childNodeId, node, it) }
+                    .map { field ->
+                        compose(node.id, field.id)
+                    }
+        }
         session.attributes[CHILD_SCOPE] = ChildScope(
-                nodeScope = nodeIdScope.toMutableSet(),
+                nodeScope = nodeScope.map { it.id }.toMutableSet(),
                 nodeClassScope = nodeClassIdScope.toMutableSet(),
                 sync = mapOf(
                         NodeClassService::class.simpleName!! to nodeClassIdScope.toMutableList(),
-                        FieldService::class.simpleName!! to fieldIdScope.toMutableList(),
-                        NodeService::class.simpleName!! to nodeIdScope.toMutableList())
+                        FieldService::class.simpleName!! to fieldScope.map { it.id }.toMutableList(),
+                        NodeService::class.simpleName!! to nodeScope.map { it.id }.toMutableList(),
+                        FieldValueService::class.simpleName!! to fieldValueIdScope.toMutableList()
+                )
         )
     }
 
@@ -95,7 +113,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
             val scope = childScope(session)
             val inScope = scope.sync[serviceName]!!.remove(dataShell.id)
             if (inScope) {
-                IBaseService.get(serviceName!!).getById(dataShell.id)?.apply {
+                IBaseService.service(serviceName!!).getById(dataShell.id)?.apply {
                     if (updateTime > dataShell.updateTime) {
                         send(session, ISlave::dataUpdate, this, serviceName)
                     }
@@ -106,13 +124,14 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
         }
 
         override fun serviceSyncFinishedFromSlave(session: WebSocketSession, content: String, serviceName: String?) {
-            val syncList = childScope(session).sync[serviceName]
-            syncList?.forEach {
-                IBaseService.get(serviceName!!).getById(it)?.apply {
-                    send(session, ISlave::dataUpdate, this, serviceName)
+            childScope(session).sync[serviceName]?.apply {
+                forEach {
+                    IBaseService.service(serviceName!!).getById(it)?.apply {
+                        send(session, ISlave::dataUpdate, this, serviceName)
+                    }
                 }
+                clear()
             }
-            syncList?.clear()
             send(session, ISlave::serviceSyncFinishedFromMaster, "", serviceName)
         }
 
