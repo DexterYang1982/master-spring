@@ -48,13 +48,79 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                         } else {
                             if (childScope.scope[message.serviceName]?.contains(message.dataId) == true &&
                                     childScope.sync[message.serviceName]?.contains(message.dataId) == false) {
-
                                 IBaseService.service(message.serviceName).getById(message.dataId)?.apply {
                                     send(session, ISlave::dataUpdate, this, message.serviceName)
                                 }
-                            } else if (message.serviceName == NodeService::class.simpleName) {
+                            } else if (message.serviceName == NodeService::class.simpleName ||
+                                    message.serviceName == FieldService::class.simpleName) {
+                                val childNode = bootstrap.nodeService.getById(childNodeId(session))!!
+                                var nodeClassToScope: INodeClass? = null
+                                var fieldsToScope: List<IField>? = null
+                                var nodeToScope: INode? = null
+                                var fieldValueToScope: List<String>? = null
+                                if (message.serviceName == NodeService::class.simpleName) {
+                                    var asChild = false
+                                    val nodeUpdated = bootstrap.nodeService.getById(message.dataId)!!
+                                    if (nodeUpdated.path.contains(childNode.id)) {
+                                        nodeToScope = nodeUpdated
+                                        asChild = true
+                                    } else {
+                                        var external = false
+                                        childNode.externalScope.forEach {
+                                            external = external || nodeUpdated.path.contains(it)
+                                        }
+                                        if (external) {
+                                            nodeToScope = nodeUpdated
+                                            asChild = false
+                                        }
+                                    }
+                                    if (nodeToScope != null && !childScope.scope[NodeClassService::class.simpleName]!!.contains(nodeToScope.nodeClassId)) {
+                                        nodeClassToScope = bootstrap.nodeClassService.getById(nodeUpdated.nodeClassId)!!
+                                    }
+                                    if (nodeClassToScope != null) {
+                                        fieldsToScope = bootstrap.fieldService.getByNodeClass(nodeClassToScope)
+                                    }
+                                    fieldValueToScope = fieldsToScope
+                                            ?.filter { field ->
+                                                asChild || field.through
+                                            }
+                                            ?.map { field ->
+                                                compose(nodeUpdated.id, field.id)
+                                            }
 
-
+                                } else if (message.serviceName == FieldService::class.simpleName) {
+                                    val fieldUpdated = bootstrap.fieldService.getById(message.dataId)!!
+                                    if (childScope.scope[NodeClassService::class.simpleName]!!.contains(fieldUpdated.nodeClassId)) {
+                                        fieldsToScope = listOf(fieldUpdated)
+                                        fieldValueToScope = childScope.scope[NodeService::class.simpleName]!!.mapNotNull { nodeId ->
+                                            bootstrap.nodeService.getById(nodeId)
+                                        }.filter { node ->
+                                            node.nodeClassId == fieldUpdated.nodeClassId
+                                        }.filter { node ->
+                                            fieldUpdated.through || node.id == childNode.id || node.path.contains(childNode.id)
+                                        }.map { node ->
+                                            compose(node.id, fieldUpdated.id)
+                                        }
+                                    }
+                                }
+                                nodeClassToScope?.apply {
+                                    childScope.scope[NodeClassService::class.simpleName]!!.add(id)
+                                    send(session, ISlave::dataUpdate, this, NodeClassService::class.simpleName)
+                                }
+                                fieldsToScope?.forEach { field ->
+                                    childScope.scope[FieldService::class.simpleName]!!.add(field.id)
+                                    send(session, ISlave::dataUpdate, field, FieldService::class.simpleName)
+                                }
+                                nodeToScope?.apply {
+                                    childScope.scope[NodeService::class.simpleName]!!.add(id)
+                                    send(session, ISlave::dataUpdate, this, NodeService::class.simpleName)
+                                }
+                                fieldValueToScope?.forEach { fieldValueId ->
+                                    childScope.scope[FieldValueService::class.simpleName]!!.add(fieldValueId)
+                                    bootstrap.fieldValueService.getById(fieldValueId)?.apply {
+                                        send(session, ISlave::dataUpdate, this, FieldValueService::class.simpleName)
+                                    }
+                                }
                             }
                         }
                     }
