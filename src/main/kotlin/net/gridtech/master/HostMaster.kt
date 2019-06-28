@@ -1,5 +1,6 @@
 package net.gridtech.master
 
+import io.reactivex.schedulers.Schedulers.io
 import net.gridtech.core.Bootstrap
 import net.gridtech.core.data.*
 import net.gridtech.core.exchange.DataShell
@@ -7,6 +8,7 @@ import net.gridtech.core.exchange.ExchangeParcel
 import net.gridtech.core.exchange.IMaster
 import net.gridtech.core.exchange.ISlave
 import net.gridtech.core.util.compose
+import net.gridtech.core.util.dataChangedPublisher
 import net.gridtech.core.util.parse
 import net.gridtech.core.util.stringfy
 import org.springframework.web.socket.CloseStatus
@@ -31,7 +33,32 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
     }
 
     init {
+        dataChangedPublisher
+                .subscribeOn(io())
+                .subscribe { message ->
+                    childrenSet.filter { session ->
+                        message.peer != childPeer(session)
+                    }.forEach { session ->
+                        val childScope = childScope(session)
+                        if (message.type == ChangedType.DELETE) {
+                            if (childScope.scope[message.serviceName]?.remove(message.dataId) == true &&
+                                    childScope.sync[message.serviceName]?.remove(message.dataId) == false) {
+                                send(session, ISlave::dataDelete, message.dataId, message.serviceName)
+                            }
+                        } else {
+                            if (childScope.scope[message.serviceName]?.contains(message.dataId) == true &&
+                                    childScope.sync[message.serviceName]?.contains(message.dataId) == false) {
 
+                                IBaseService.service(message.serviceName).getById(message.dataId)?.apply {
+                                    send(session, ISlave::dataUpdate, this, message.serviceName)
+                                }
+                            } else if (message.serviceName == NodeService::class.simpleName) {
+
+
+                            }
+                        }
+                    }
+                }
     }
 
     override fun afterConnectionEstablished(session: WebSocketSession) {
@@ -79,8 +106,12 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                     }
         }
         session.attributes[CHILD_SCOPE] = ChildScope(
-                nodeScope = nodeScope.map { it.id }.toMutableSet(),
-                nodeClassScope = nodeClassIdScope.toMutableSet(),
+                scope = mapOf(
+                        NodeClassService::class.simpleName!! to nodeClassIdScope.toMutableSet(),
+                        FieldService::class.simpleName!! to fieldScope.map { it.id }.toMutableSet(),
+                        NodeService::class.simpleName!! to nodeScope.map { it.id }.toMutableSet(),
+                        FieldValueService::class.simpleName!! to fieldValueIdScope.toMutableSet()
+                ),
                 sync = mapOf(
                         NodeClassService::class.simpleName!! to nodeClassIdScope.toMutableList(),
                         FieldService::class.simpleName!! to fieldScope.map { it.id }.toMutableList(),
