@@ -59,11 +59,11 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                 var nodeToScope: INode? = null
                                 var fieldValueToScope: List<String>? = null
                                 if (message.serviceName == NodeService::class.simpleName) {
-                                    var asChild = false
+                                    var inFullScope = false
                                     val nodeUpdated = bootstrap.nodeService.getById(message.dataId)!!
                                     if (nodeUpdated.path.contains(childNode.id)) {
                                         nodeToScope = nodeUpdated
-                                        asChild = true
+                                        inFullScope = true
                                     } else {
                                         var external = false
                                         childNode.externalScope.forEach {
@@ -71,7 +71,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                         }
                                         if (external) {
                                             nodeToScope = nodeUpdated
-                                            asChild = false
+                                            inFullScope = false
                                         }
                                     }
                                     if (nodeToScope != null && !childScope.scope[NodeClassService::class.simpleName]!!.contains(nodeToScope.nodeClassId)) {
@@ -82,7 +82,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                     }
                                     fieldValueToScope = fieldsToScope
                                             ?.filter { field ->
-                                                asChild || field.through
+                                                inFullScope || field.through
                                             }
                                             ?.map { field ->
                                                 compose(nodeUpdated.id, field.id)
@@ -137,6 +137,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
     override fun handleTextMessage(session: WebSocketSession, message: TextMessage) {
         try {
             val exchangeParcel: ExchangeParcel = parse(message.payload)
+            println("Master->$exchangeParcel")
             commandMap[exchangeParcel.command]?.call(handler, session, exchangeParcel.content, exchangeParcel.serviceName)
         } catch (e: Throwable) {
             e.printStackTrace()
