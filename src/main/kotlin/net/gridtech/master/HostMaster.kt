@@ -26,9 +26,9 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
     companion object {
         private const val CHILD_SCOPE = "scope"
         private const val CHILD_NODE_ID = "nodeId"
-        private const val CHILD_PEER = "peer"
+        private const val CHILD_INSTANCE = "instance"
         fun childNodeId(session: WebSocketSession): String = session.attributes[CHILD_NODE_ID] as String
-        fun childPeer(session: WebSocketSession): String = session.attributes[CHILD_PEER] as String
+        fun childInstance(session: WebSocketSession): String = session.attributes[CHILD_INSTANCE] as String
         fun childScope(session: WebSocketSession): ChildScope = session.attributes[CHILD_SCOPE] as ChildScope
     }
 
@@ -37,7 +37,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                 .subscribeOn(io())
                 .subscribe { message ->
                     childrenSet.filter { session ->
-                        message.peer != childPeer(session)
+                        message.instance != childInstance(session)
                     }.forEach { session ->
                         val childScope = childScope(session)
                         if (message.type == ChangedType.DELETE) {
@@ -48,17 +48,17 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                         } else {
                             if (childScope.scope[message.serviceName]?.contains(message.dataId) == true &&
                                     childScope.sync[message.serviceName]?.contains(message.dataId) == false) {
-                                IBaseService.service(message.serviceName).getById(message.dataId)?.apply {
+                                bootstrap.service(message.serviceName).getById(message.dataId)?.apply {
                                     send(session, ISlave::dataUpdate, this, message.serviceName)
                                 }
-                            } else if (message.serviceName == NodeService::class.simpleName ||
-                                    message.serviceName == FieldService::class.simpleName) {
+                            } else if (message.serviceName == bootstrap.nodeService.serviceName ||
+                                    message.serviceName == bootstrap.fieldService.serviceName) {
                                 val childNode = bootstrap.nodeService.getById(childNodeId(session))!!
                                 var nodeClassToScope: INodeClass? = null
                                 var fieldsToScope: List<IField>? = null
                                 var nodeToScope: INode? = null
                                 var fieldValueToScope: List<String>? = null
-                                if (message.serviceName == NodeService::class.simpleName) {
+                                if (message.serviceName == bootstrap.nodeService.serviceName) {
                                     var inFullScope = false
                                     val nodeUpdated = bootstrap.nodeService.getById(message.dataId)!!
                                     if (nodeUpdated.path.contains(childNode.id)) {
@@ -74,7 +74,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                             inFullScope = false
                                         }
                                     }
-                                    if (nodeToScope != null && !childScope.scope[NodeClassService::class.simpleName]!!.contains(nodeToScope.nodeClassId)) {
+                                    if (nodeToScope != null && !childScope.scope.getValue(bootstrap.nodeClassService.serviceName).contains(nodeToScope.nodeClassId)) {
                                         nodeClassToScope = bootstrap.nodeClassService.getById(nodeUpdated.nodeClassId)!!
                                     }
                                     if (nodeClassToScope != null) {
@@ -88,11 +88,11 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                                 compose(nodeUpdated.id, field.id)
                                             }
 
-                                } else if (message.serviceName == FieldService::class.simpleName) {
+                                } else if (message.serviceName == bootstrap.fieldService.serviceName) {
                                     val fieldUpdated = bootstrap.fieldService.getById(message.dataId)!!
-                                    if (childScope.scope[NodeClassService::class.simpleName]!!.contains(fieldUpdated.nodeClassId)) {
+                                    if (childScope.scope.getValue(bootstrap.nodeClassService.serviceName).contains(fieldUpdated.nodeClassId)) {
                                         fieldsToScope = listOf(fieldUpdated)
-                                        fieldValueToScope = childScope.scope[NodeService::class.simpleName]!!.mapNotNull { nodeId ->
+                                        fieldValueToScope = childScope.scope.getValue(bootstrap.nodeService.serviceName).mapNotNull { nodeId ->
                                             bootstrap.nodeService.getById(nodeId)
                                         }.filter { node ->
                                             node.nodeClassId == fieldUpdated.nodeClassId
@@ -104,21 +104,21 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                     }
                                 }
                                 nodeClassToScope?.apply {
-                                    childScope.scope[NodeClassService::class.simpleName]!!.add(id)
-                                    send(session, ISlave::dataUpdate, this, NodeClassService::class.simpleName)
+                                    childScope.scope.getValue(bootstrap.nodeClassService.serviceName).add(id)
+                                    send(session, ISlave::dataUpdate, this, bootstrap.nodeClassService.serviceName)
                                 }
                                 fieldsToScope?.forEach { field ->
-                                    childScope.scope[FieldService::class.simpleName]!!.add(field.id)
-                                    send(session, ISlave::dataUpdate, field, FieldService::class.simpleName)
+                                    childScope.scope.getValue(bootstrap.fieldService.serviceName).add(field.id)
+                                    send(session, ISlave::dataUpdate, field, bootstrap.fieldService.serviceName)
                                 }
                                 nodeToScope?.apply {
-                                    childScope.scope[NodeService::class.simpleName]!!.add(id)
-                                    send(session, ISlave::dataUpdate, this, NodeService::class.simpleName)
+                                    childScope.scope.getValue(bootstrap.nodeService.serviceName).add(id)
+                                    send(session, ISlave::dataUpdate, this, bootstrap.nodeService.serviceName)
                                 }
                                 fieldValueToScope?.forEach { fieldValueId ->
-                                    childScope.scope[FieldValueService::class.simpleName]!!.add(fieldValueId)
+                                    childScope.scope.getValue(bootstrap.fieldValueService.serviceName).add(fieldValueId)
                                     bootstrap.fieldValueService.getById(fieldValueId)?.apply {
-                                        send(session, ISlave::dataUpdate, this, FieldValueService::class.simpleName)
+                                        send(session, ISlave::dataUpdate, this, bootstrap.fieldValueService.serviceName)
                                     }
                                 }
                             }
@@ -128,7 +128,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
     }
 
     override fun afterConnectionEstablished(session: WebSocketSession) {
-        println("child node ${childNodeId(session)} peer ${childPeer(session)} connected")
+        println("child node ${childNodeId(session)} instance ${childInstance(session)} connected")
         childrenSet.add(session)
         createChildNodeScope(session)
         send(session, ISlave::beginToSync, "")
@@ -146,12 +146,12 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
     }
 
     override fun afterConnectionClosed(session: WebSocketSession, status: CloseStatus) {
-        System.err.println("child node ${childNodeId(session)} peer ${childPeer(session)} disconnected ${status.code}")
+        System.err.println("child node ${childNodeId(session)} instance ${childInstance(session)} disconnected ${status.code}")
         childrenSet.remove(session)
     }
 
     override fun handleTransportError(session: WebSocketSession, exception: Throwable) {
-        System.err.println("child node ${childNodeId(session)} peer ${childPeer(session)} error ${exception.message}")
+        System.err.println("child node ${childNodeId(session)} instance ${childInstance(session)} error ${exception.message}")
         childrenSet.remove(session)
     }
 
@@ -174,16 +174,16 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
         }
         session.attributes[CHILD_SCOPE] = ChildScope(
                 scope = mapOf(
-                        NodeClassService::class.simpleName!! to nodeClassIdScope.toMutableSet(),
-                        FieldService::class.simpleName!! to fieldScope.map { it.id }.toMutableSet(),
-                        NodeService::class.simpleName!! to nodeScope.map { it.id }.toMutableSet(),
-                        FieldValueService::class.simpleName!! to fieldValueIdScope.toMutableSet()
+                        bootstrap.nodeClassService.serviceName to nodeClassIdScope.toMutableSet(),
+                        bootstrap.fieldService.serviceName to fieldScope.map { it.id }.toMutableSet(),
+                        bootstrap.nodeService.serviceName to nodeScope.map { it.id }.toMutableSet(),
+                        bootstrap.fieldValueService.serviceName to fieldValueIdScope.toMutableSet()
                 ),
                 sync = mapOf(
-                        NodeClassService::class.simpleName!! to nodeClassIdScope.toMutableList(),
-                        FieldService::class.simpleName!! to fieldScope.map { it.id }.toMutableList(),
-                        NodeService::class.simpleName!! to nodeScope.map { it.id }.toMutableList(),
-                        FieldValueService::class.simpleName!! to fieldValueIdScope.toMutableList()
+                        bootstrap.nodeClassService.serviceName to nodeClassIdScope.toMutableList(),
+                        bootstrap.fieldService.serviceName to fieldScope.map { it.id }.toMutableList(),
+                        bootstrap.nodeService.serviceName to nodeScope.map { it.id }.toMutableList(),
+                        bootstrap.fieldValueService.serviceName to fieldValueIdScope.toMutableList()
                 )
         )
     }
@@ -211,7 +211,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
             val scope = childScope(session)
             val inScope = scope.sync[serviceName]!!.remove(dataShell.id)
             if (inScope) {
-                IBaseService.service(serviceName!!).getById(dataShell.id)?.apply {
+                bootstrap.service(serviceName!!).getById(dataShell.id)?.apply {
                     if (updateTime > dataShell.updateTime) {
                         send(session, ISlave::dataUpdate, this, serviceName)
                     }
@@ -224,7 +224,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
         override fun serviceSyncFinishedFromSlave(session: WebSocketSession, content: String, serviceName: String?) {
             childScope(session).sync[serviceName]?.apply {
                 forEach {
-                    IBaseService.service(serviceName!!).getById(it)?.apply {
+                    bootstrap.service(serviceName!!).getById(it)?.apply {
                         send(session, ISlave::dataUpdate, this, serviceName)
                     }
                 }
@@ -235,7 +235,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
 
         override fun fieldValueUpdate(session: WebSocketSession, content: String, serviceName: String?) {
             val fieldValue: FieldValueStub = parse(content)
-            bootstrap.fieldValueService.save(fieldValue, childPeer(session))
+            bootstrap.fieldValueService.save(fieldValue, childInstance(session))
         }
     }
 }
