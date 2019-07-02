@@ -210,16 +210,29 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
             val dataShell: DataShell = parse(content)
             val scope = childScope(session)
             val inScope = scope.sync[serviceName]!!.remove(dataShell.id)
-            if (inScope) {
-                bootstrap.service(serviceName!!).getById(dataShell.id)?.apply {
-                    if (updateTime > dataShell.updateTime) {
-                        send(session, ISlave::dataUpdate, this, serviceName)
-                    }
+            if (serviceName == bootstrap.fieldValueService.serviceName && inScope) {
+                val localFieldValue = bootstrap.fieldValueService.getById(dataShell.id)
+                val localUpdateTime = localFieldValue?.updateTime ?: -1
+                if (localUpdateTime > dataShell.updateTime) {
+                    send(session, ISlave::dataUpdate, localFieldValue!!, serviceName)
                 }
+                if (localUpdateTime < dataShell.updateTime) {
+                    send(session, ISlave::fieldValueAskFor, DataShell(dataShell.id, localUpdateTime), serviceName)
+                }
+
             } else {
-                send(session, ISlave::dataDelete, dataShell.id, serviceName)
+                if (inScope) {
+                    bootstrap.service(serviceName!!).getById(dataShell.id)?.apply {
+                        if (updateTime > dataShell.updateTime) {
+                            send(session, ISlave::dataUpdate, this, serviceName)
+                        }
+                    }
+                } else {
+                    send(session, ISlave::dataDelete, dataShell.id, serviceName)
+                }
             }
         }
+
 
         override fun serviceSyncFinishedFromSlave(session: WebSocketSession, content: String, serviceName: String?) {
             childScope(session).sync[serviceName]?.apply {
