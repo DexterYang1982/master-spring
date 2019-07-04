@@ -52,6 +52,13 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                 bootstrap.service(message.serviceName).getById(message.dataId)?.apply {
                                     send(session, ISlave::dataUpdate, this, message.serviceName)
                                 }
+                            } else if (message.serviceName == bootstrap.nodeClassService.serviceName) {
+                                val childNode = bootstrap.nodeService.getById(childNodeId(session))!!
+                                val nodeClassUpdated = bootstrap.nodeClassService.getById(message.dataId)!!
+                                if (nodeClassUpdated.tags.containsAll(childNode.externalNodeClassTagScope)) {
+                                    childScope.scope[bootstrap.nodeClassService.serviceName]?.add(nodeClassUpdated.id)
+                                    send(session, ISlave::dataUpdate, nodeClassUpdated, message.serviceName)
+                                }
                             } else if (message.serviceName == bootstrap.nodeService.serviceName ||
                                     message.serviceName == bootstrap.fieldService.serviceName) {
                                 val childNode = bootstrap.nodeService.getById(childNodeId(session))!!
