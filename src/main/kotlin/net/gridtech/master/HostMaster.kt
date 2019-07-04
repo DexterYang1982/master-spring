@@ -41,8 +41,9 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                     }.forEach { session ->
                         val childScope = childScope(session)
                         if (message.type == ChangedType.DELETE) {
-                            if (childScope.scope[message.serviceName]?.remove(message.dataId) == true &&
-                                    childScope.sync[message.serviceName]?.remove(message.dataId) == false) {
+                            if (childScope.scope[message.serviceName]?.remove(message.dataId) == true
+                                    && childScope.sync[message.serviceName]?.remove(message.dataId) == false
+                                    && message.serviceName != bootstrap.fieldValueService.serviceName) {
                                 send(session, ISlave::dataDelete, message.dataId, message.serviceName)
                             }
                         } else {
@@ -66,7 +67,7 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                         inFullScope = true
                                     } else {
                                         var external = false
-                                        childNode.externalScope.forEach {
+                                        childNode.externalNodeIdScope.forEach {
                                             external = external || nodeUpdated.path.contains(it)
                                         }
                                         if (external) {
@@ -157,8 +158,11 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
 
     private fun createChildNodeScope(session: WebSocketSession) {
         val childNodeId = childNodeId(session)
-        val nodeScope = bootstrap.nodeService.getNodeScope(childNodeId)
-        val nodeClassIdScope = nodeScope.map { it.nodeClassId }.toSet()
+        val childNode = bootstrap.nodeService.getById(childNodeId)!!
+        val nodeScope = bootstrap.nodeService.getNodeScope(childNode)
+        val nodeClassIdScope = nodeScope.map { it.nodeClassId }.toMutableSet().apply {
+            addAll(bootstrap.nodeClassService.getByTags(childNode.externalNodeClassTagScope).map { it.id })
+        }
         val fieldScope = nodeClassIdScope.flatMap { nodeClassId ->
             bootstrap.nodeClassService.getById(nodeClassId)?.let { nodeClass ->
                 bootstrap.fieldService.getByNodeClass(nodeClass)
