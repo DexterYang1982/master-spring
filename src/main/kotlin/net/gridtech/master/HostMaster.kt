@@ -88,13 +88,15 @@ class HostMaster(private val bootstrap: Bootstrap) : TextWebSocketHandler() {
                                     if (nodeClassToScope != null) {
                                         fieldsToScope = bootstrap.fieldService.getByNodeClass(nodeClassToScope)
                                     }
-                                    fieldValueToScope = fieldsToScope
+
+                                    fieldValueToScope = (fieldsToScope?:bootstrap.nodeClassService.getById(nodeUpdated.nodeClassId)?.let { bootstrap.fieldService.getByNodeClass(it) })
                                             ?.filter { field ->
                                                 inFullScope || field.through
                                             }
                                             ?.map { field ->
                                                 compose(nodeUpdated.id, field.id)
                                             }
+                                    System.err.println(fieldValueToScope)
 
                                 } else if (message.serviceName == bootstrap.fieldService.serviceName) {
                                     val fieldUpdated = bootstrap.fieldService.getById(message.dataId)!!
